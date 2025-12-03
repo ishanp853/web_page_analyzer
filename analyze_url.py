@@ -1,13 +1,16 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 import requests
-from bs4 import BeautifulSoup
+import regex as re
 import ollama
-import re
+
+app = FastAPI()
 
 
-# ----------------------------------
+# ---------------------
 # CLEAN HTML
-# ----------------------------------
-def clean_html(html):
+# ---------------------
+def clean_html(html: str) -> str:
     html = re.sub(r"<script[\s\S]*?</script>", "", html)
     html = re.sub(r"<style[\s\S]*?</style>", "", html)
     html = re.sub(r"<!--.*?-->", "", html)
@@ -15,73 +18,57 @@ def clean_html(html):
     return html.strip()
 
 
-# ----------------------------------
-# FETCH LIVE URL HTML
-# ----------------------------------
-def fetch_page(url):
-    print(f"[+] Fetching URL: {url}")
-
+# ---------------------
+# FETCH LIVE URL
+# ---------------------
+def fetch_page(url: str) -> str:
     headers = {"User-Agent": "Mozilla/5.0"}
-
     response = requests.get(url, headers=headers, timeout=20)
-    response.raise_for_status()
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=400, detail="Failed to fetch URL")
 
     return response.text
 
 
-# ----------------------------------
-# ANALYZE HTML USING LLAMA 3.1 8B
-# ----------------------------------
-def analyze_with_llama(cleaned_html):
+# ---------------------
+# ANALYZE WITH LLAMA
+# ---------------------
+def analyze_with_llama(cleaned_html: str) -> str:
 
     prompt = f"""
 You are an expert Conversion Rate Optimization (CRO) and landing page analyst.
 
-You will receive the raw HTML of ANY webpage (SaaS, eCommerce, blog, tools, agencies, documentation pages, mixed layouts, etc).
+You will receive the raw HTML of ANY webpage (SaaS, eCommerce, blog, tools, agencies, documentation pages, mixed layouts, etc). 
 
 Your tasks:
-
 1. Understand the page’s purpose, offer/value, target audience, and conversion goal.
 2. Identify ONLY meaningful, high-impact conversion elements that could be A/B tested.
-3. Ignore noise:
-   - scripts, comments, hidden divs
-   - boilerplate text, lorem ipsum
-   - legal footers (unless containing trust signals)
 
-You MUST return ONLY a single valid JSON object using EXACTLY this schema:
+Return ONLY valid JSON:
 
 {{
   "page_summary": "",
   "primary_goal": "",
   "elements": [
     {{
-      "id": "el_1",                 
-      "type": "",               
-      "text": "",               
-      "html_tag": "",          
-      "selector_hint": "",      
-      "section": "",            
-      "order_on_page": 1,      
-      "above_the_fold": false,    
-      "testability_score": 1, 
-      "notes": ""               
+      "id": "el_1",
+      "type": "",
+      "text": "",
+      "html_tag": "",
+      "selector_hint": "",
+      "section": "",
+      "order_on_page": 1,
+      "above_the_fold": false,
+      "testability_score": 1,
+      "notes": ""
     }}
   ]
 }}
 
-Rules:
-- Output MUST be valid JSON only (no explanation text).
-- Include only CRO-relevant elements.
-- "id" values MUST be sequential: el_1, el_2, el_3...
-- Estimate above_the_fold using DOM depth + typical desktop viewport.
-- Keep JSON short, clean, and meaningful.
-- If the page lacks certain element types, skip them.
-
 HTML:
 {cleaned_html}
 """
-
-    print("[+] Sending HTML to LLaMA model...")
 
     response = ollama.chat(
         model="llama3.1:8b",
@@ -91,22 +78,21 @@ HTML:
     return response["message"]["content"]
 
 
+# ---------------------
+# FASTAPI ENDPOINT
+# ---------------------
+@app.get("/analyze")
+def analyze(url: str):
+    """
+    Example:
+    /analyze?url=https://example.com
+    """
 
-# ----------------------------------
-# MAIN EXECUTION
-# ----------------------------------
-if __name__ == "__main__":
-    url = input("Enter URL to analyze: ")
+    try:
+        raw_html = fetch_page(url)
+        cleaned = clean_html(raw_html)
+        result = analyze_with_llama(cleaned)
+        return JSONResponse(content={"result": result})
 
-    html = fetch_page(url)
-    cleaned_html = clean_html(html)
-    result = analyze_with_llama(cleaned_html)
-
-    print("\n===== ANALYSIS RESULT =====\n")
-    print(result)
-
-    # Save result
-    with open("result.json", "w", encoding="utf8") as f:
-        f.write(result)
-
-    print("\n[✔] Saved output to result.json")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
