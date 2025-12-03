@@ -1,3 +1,6 @@
-ollama
+fastapi
+uvicorn
 requests
 beautifulsoup4
+regex
+ollama
